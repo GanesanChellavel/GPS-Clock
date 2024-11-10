@@ -1,0 +1,89 @@
+
+#include <ESP8266WiFi.h>
+#include <espnow.h>
+#include <TinyGPS++.h>
+#include <SoftwareSerial.h>
+#include <TM1637Display.h>
+
+// Constants for GPS and ESP-NOW
+static const int RXPin = 5, TXPin = 4; // D1, D2 ESP-8266
+static const uint32_t GPSBaud = 9600;
+
+// Receiver MAC Address (replace with actual receiver MAC)
+uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+
+// GPS and ESP-NOW objects
+TinyGPSPlus gps;
+SoftwareSerial ss(RXPin, TXPin);
+
+// TM1637 Display pins and object (D3 and D4 are typical)
+#define CLK 0 // D3
+#define DIO 2 // D4
+TM1637Display display(CLK, DIO);
+
+// Structure to send data (must match the receiver structure)
+typedef struct struct_message {
+  String timeSGT;
+} struct_message;
+
+// Create a struct_message called myData
+struct_message myData;
+
+// Callback when data is sent
+void OnDataSent(uint8_t *mac_addr, uint8_t sendStatus) {
+  Serial.print("Last Packet Send Status: ");
+  if (sendStatus == 0) {
+    Serial.println("Delivery success");
+  } else {
+    Serial.println("Delivery fail");
+  }
+}
+
+void setup() {
+  // Initialize Serial Monitor
+  Serial.begin(115200);
+
+  // Initialize GPS
+  ss.begin(GPSBaud);
+
+  // Initialize TM1637 Display
+  display.setBrightness(0x0f); // Set display brightness (0x0f is max)
+
+  // Set device as a Wi-Fi Station and initialize ESP-NOW
+  WiFi.mode(WIFI_STA);
+  if (esp_now_init() != 0) {
+    Serial.println("Error initializing ESP-NOW");
+    return;
+  }
+
+  // Register callback for sending status
+  esp_now_set_self_role(ESP_NOW_ROLE_CONTROLLER);
+  esp_now_register_send_cb(OnDataSent);
+  
+  // Register peer
+  esp_now_add_peer(broadcastAddress, ESP_NOW_ROLE_SLAVE, 1, NULL, 0);
+}
+
+void loop() {
+  // Check GPS data and update time
+  while (ss.available() > 0) {
+    gps.encode(ss.read());
+    if (gps.time.isUpdated()) {
+      int hourSGT = (gps.time.hour() + 8) % 24; // Singapore time (UTC+8)
+      int minute = gps.time.minute();
+
+      String formattedTime = (hourSGT < 10 ? "0" : "") + String(hourSGT) + ":" +
+                             (minute < 10 ? "0" : "") + String(minute);
+      myData.timeSGT = formattedTime;
+      
+      Serial.print("Time (SGT): ");
+      Serial.println(formattedTime);
+      
+      // Display time on TM1637
+      display.showNumberDecEx(hourSGT * 100 + minute, 0x40, true); // Display HH:MM with colon
+
+      // Send GPS time immediately when updated
+      esp_now_send(broadcastAddress, (uint8_t *) &myData, sizeof(myData));
+    }
+  }
+}
