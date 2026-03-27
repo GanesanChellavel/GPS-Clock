@@ -1,0 +1,132 @@
+
+Master gps clock with LoRa without dbm
+--------------------------------------------------------------------------------------------------------------------
+#include <TinyGPS++.h>
+#include <TM1637Display.h>
+
+// ================= OBJECTS =================
+TinyGPSPlus gps;
+HardwareSerial GPSserial(1);
+HardwareSerial LORAserial(2);
+
+// ================= PIN DEFINITIONS =================
+// GPS
+#define GPS_RX 18
+#define GPS_TX 17
+
+// LoRa (DX-LR01)
+#define LORA_RX 16
+#define LORA_TX 15
+#define M0 6
+#define M1 7
+
+// TM1637
+#define CLK 4
+#define DIO 5
+TM1637Display display(CLK, DIO);
+
+// ================= VARIABLES =================
+unsigned long lastSend = 0;
+
+void setup() {
+  Serial.begin(115200);
+
+  // GPS UART
+  GPSserial.begin(9600, SERIAL_8N1, GPS_RX, GPS_TX);
+
+  // LoRa UART
+  LORAserial.begin(9600, SERIAL_8N1, LORA_RX, LORA_TX);
+
+  // LoRa Mode (Normal)
+  pinMode(M0, OUTPUT);
+  pinMode(M1, OUTPUT);
+  digitalWrite(M0, LOW);
+  digitalWrite(M1, LOW);
+
+  // Display
+  display.setBrightness(0x0f);
+
+  Serial.println("ESP32-S3 GPS + LoRa Clock Start...");
+}
+
+void loop() {
+
+  // ================= READ GPS =================
+  while (GPSserial.available()) {
+    gps.encode(GPSserial.read());
+  }
+
+  // ================= IF TIME UPDATED =================
+  if (gps.time.isValid() && gps.time.isUpdated()) {
+
+    int hourSGT = (gps.time.hour() + 8) % 24;
+    int minute = gps.time.minute();
+
+    // Format HHMM
+    int displayTime = hourSGT * 100 + minute;
+
+    // Show on TM1637
+    display.showNumberDecEx(displayTime, 0x40, true);
+
+    // Format string
+    String timeStr = (hourSGT < 10 ? "0" : "") + String(hourSGT) + ":" +
+                     (minute < 10 ? "0" : "") + String(minute);
+
+    // ================= DEBUG =================
+    Serial.print("GPS Time (SGT): ");
+    Serial.println(timeStr);
+
+    // ================= SEND VIA LORA (EVERY 5 SEC) =================
+    if (millis() - lastSend > 5000) {
+      lastSend = millis();
+
+      String message = "TIME:" + timeStr;
+
+      LORAserial.println(message);
+
+      Serial.print("LoRa Sent: ");
+      Serial.println(message);
+    }
+  }
+
+  // ================= GPS STATUS DEBUG =================
+  if (millis() % 3000 < 50) {
+    if (!gps.location.isValid()) {
+      Serial.println("Waiting for GPS fix...");
+    }
+  }
+}
+----------------------------------------------------------------------------------------------------------------------------------
+Receiver code only Lora
+
+Receiver
+------------
+#define RXD2 16
+#define TXD2 17
+
+#define M0 4
+#define M1 5
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(M0, OUTPUT);
+  pinMode(M1, OUTPUT);
+
+  // Normal working mode
+  digitalWrite(M0, LOW);
+  digitalWrite(M1, LOW);
+
+  Serial2.begin(9600, SERIAL_8N1, RXD2, TXD2);
+
+  Serial.println("ESP32-U DX-LR01 SLAVE (433 MHz)");
+}
+
+void loop() {
+  if (Serial2.available()) {
+    String msg = Serial2.readStringUntil('\n');
+    Serial.print("Received: ");
+    Serial.println(msg);
+  }
+}
+-----------------------------------------------------------------------------------------------------------
