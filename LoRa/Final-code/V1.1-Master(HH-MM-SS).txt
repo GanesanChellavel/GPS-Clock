@@ -1,0 +1,113 @@
+TM1637 display → HH:MM
+✅ LoRa transmit → HH:MM:SS every 5 second (real-time)
+
+Here is your clean, complete transmitter code (ESP32-S3 + GPS + LoRa + TM1637):
+------------------------------------------------------------------------
+#include <TinyGPS++.h>
+#include <TM1637Display.h>
+
+// ================= OBJECTS =================
+TinyGPSPlus gps;
+HardwareSerial GPSserial(1);
+HardwareSerial LORAserial(2);
+
+// ================= PIN DEFINITIONS =================
+// GPS
+#define GPS_RX 18
+#define GPS_TX 17
+
+// LoRa (DX-LR01)
+#define LORA_RX 16
+#define LORA_TX 15
+#define M0 6
+#define M1 7
+
+// TM1637
+#define CLK 4
+#define DIO 5
+TM1637Display display(CLK, DIO);
+
+// ================= VARIABLES =================
+unsigned long lastSend = 0;
+unsigned long lastDisplayUpdate = 0;
+int lastSecond = -1;
+
+void setup() {
+  Serial.begin(115200);
+
+  // GPS UART
+  GPSserial.begin(9600, SERIAL_8N1, GPS_RX, GPS_TX);
+
+  // LoRa UART
+  LORAserial.begin(9600, SERIAL_8N1, LORA_RX, LORA_TX);
+
+  // LoRa Mode (Normal)
+  pinMode(M0, OUTPUT);
+  pinMode(M1, OUTPUT);
+  digitalWrite(M0, LOW);
+  digitalWrite(M1, LOW);
+
+  // Display
+  display.setBrightness(0x0f);
+
+  Serial.println("ESP32-S3 GPS + LoRa Clock Start...");
+}
+
+void loop() {
+
+  // ================= READ GPS =================
+  while (GPSserial.available()) {
+    gps.encode(GPSserial.read());
+  }
+
+  // ================= VALID TIME =================
+  if (gps.time.isValid()) {
+
+    int hourSGT = (gps.time.hour() + 8) % 24;
+    int minute  = gps.time.minute();
+    int second  = gps.time.second();
+
+    // ================= DISPLAY UPDATE (1 sec, synced) =================
+    if (second != lastSecond) {
+      lastSecond = second;
+
+      int displayTime = hourSGT * 100 + minute;
+
+      // Show HH:MM with blinking colon
+      static bool colonState = false;
+      colonState = !colonState;
+
+      display.showNumberDecEx(displayTime, colonState ? 0x40 : 0x00, true);
+    }
+
+    // ================= LORA SEND (EVERY 5 SECONDS) =================
+    if (millis() - lastSend >= 5000 && second != lastSecond + 1) {
+      lastSend = millis();
+
+      // Format HH:MM:SS
+      String timeStr =
+        (hourSGT < 10 ? "0" : "") + String(hourSGT) + ":" +
+        (minute  < 10 ? "0" : "") + String(minute)  + ":" +
+        (second  < 10 ? "0" : "") + String(second);
+
+      String message = "TIME:" + timeStr;
+
+      LORAserial.println(message);
+
+      Serial.print("LoRa Sent: ");
+      Serial.println(message);
+    }
+  }
+
+  // ================= GPS STATUS DEBUG =================
+  static unsigned long lastDebug = 0;
+  if (millis() - lastDebug > 3000) {
+    lastDebug = millis();
+
+    if (!gps.time.isValid()) {
+      Serial.println("Waiting for GPS signal...");
+    } else {
+      Serial.println("GPS Locked ✔");
+    }
+  }
+}

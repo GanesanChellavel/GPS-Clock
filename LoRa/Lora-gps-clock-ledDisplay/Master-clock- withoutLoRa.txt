@@ -1,0 +1,53 @@
+Master clock 
+
+esp32-s3  , gps module ,i2c- 4digit LED display 
+
+---------------------------------------------------------------------------------
+#include <TinyGPS++.h>
+#include <TM1637Display.h>
+
+// Create GPS object
+TinyGPSPlus gps;
+
+// Use UART1 (or UART2)
+HardwareSerial GPSserial(1);
+
+// Define pins
+#define RXD2 16
+#define TXD2 15
+
+// TM1637 Display pins
+#define CLK 4
+#define DIO 5
+TM1637Display display(CLK, DIO);
+
+void setup() {
+  Serial.begin(115200);
+
+  // Start GPS UART
+  GPSserial.begin(9600, SERIAL_8N1, RXD2, TXD2);
+
+  // Display
+  display.setBrightness(0x0f);
+
+  Serial.println("ESP32-S3 GPS Clock Start...");
+}
+
+void loop() {
+  while (GPSserial.available() > 0) {
+    gps.encode(GPSserial.read());
+
+    if (gps.time.isUpdated()) {
+      int hourSGT = (gps.time.hour() + 8) % 24;
+      int minute = gps.time.minute();
+
+      String formattedTime = (hourSGT < 10 ? "0" : "") + String(hourSGT) + ":" +
+                             (minute < 10 ? "0" : "") + String(minute);
+
+      Serial.print("Time (SGT): ");
+      Serial.println(formattedTime);
+
+      display.showNumberDecEx(hourSGT * 100 + minute, 0x40, true);
+    }
+  }
+}

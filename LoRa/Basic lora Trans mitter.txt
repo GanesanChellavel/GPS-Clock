@@ -1,0 +1,162 @@
+Basic lora Trans mitter 
+----------------------------------------------
+#define RXD2 16
+#define TXD2 17
+
+#define M0 4
+#define M1 5
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(M0, OUTPUT);
+  pinMode(M1, OUTPUT);
+
+  // Normal working mode
+  digitalWrite(M0, LOW);
+  digitalWrite(M1, LOW);
+
+  Serial2.begin(9600, SERIAL_8N1, RXD2, TXD2);
+
+  Serial.println("ESP32-U DX-LR01 MASTER (433 MHz)");
+}
+
+void loop() {
+  Serial.println("Sending data...");
+  Serial2.println("HELLO 433MHz FROM MASTER");
+
+  delay(2000);
+}
+--------------------------------------------------------------------------------------
+Receiver
+------------
+#define RXD2 16
+#define TXD2 17
+
+#define M0 4
+#define M1 5
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(M0, OUTPUT);
+  pinMode(M1, OUTPUT);
+
+  // Normal working mode
+  digitalWrite(M0, LOW);
+  digitalWrite(M1, LOW);
+
+  Serial2.begin(9600, SERIAL_8N1, RXD2, TXD2);
+
+  Serial.println("ESP32-U DX-LR01 SLAVE (433 MHz)");
+}
+
+void loop() {
+  if (Serial2.available()) {
+    String msg = Serial2.readStringUntil('\n');
+    Serial.print("Received: ");
+    Serial.println(msg);
+  }
+}
+----------------------------------------------------------------------------------------------
+Light ON / OFF control with Lora with esp32
+Transmitter code
+#define RXD2 16
+#define TXD2 17
+
+#define M0 4
+#define M1 5
+
+#define SWITCH_PIN 27
+
+int lastReading = HIGH;
+int switchState = HIGH;
+unsigned long lastDebounceTime = 0;
+const unsigned long debounceDelay = 50; // ms
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(SWITCH_PIN, INPUT_PULLUP);
+  pinMode(M0, OUTPUT);
+  pinMode(M1, OUTPUT);
+
+  // Normal mode
+  digitalWrite(M0, LOW);
+  digitalWrite(M1, LOW);
+
+  Serial2.begin(9600, SERIAL_8N1, RXD2, TXD2);
+
+  Serial.println("MASTER READY (433 MHz, Debounced)");
+}
+
+void loop() {
+  int reading = digitalRead(SWITCH_PIN);
+
+  if (reading != lastReading) {
+    lastDebounceTime = millis();
+  }
+
+  if ((millis() - lastDebounceTime) > debounceDelay) {
+    if (reading != switchState) {
+      switchState = reading;
+
+      if (switchState == LOW) {
+        Serial.println("Switch ON → Send ON");
+        Serial2.println("ON");
+      } else {
+        Serial.println("Switch OFF → Send OFF");
+        Serial2.println("OFF");
+      }
+    }
+  }
+
+  lastReading = reading;
+}
+------------------------------------------------------------------------------------------------------------------------------------
+Light ON / OFF control with Lora with esp32
+Transmitter code
+
+#define RXD2 16
+#define TXD2 17
+
+#define M0 4
+#define M1 5
+
+#define LIGHT_PIN 2
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(LIGHT_PIN, OUTPUT);
+  digitalWrite(LIGHT_PIN, LOW);
+
+  pinMode(M0, OUTPUT);
+  pinMode(M1, OUTPUT);
+
+  // Normal mode
+  digitalWrite(M0, LOW);
+  digitalWrite(M1, LOW);
+
+  Serial2.begin(9600, SERIAL_8N1, RXD2, TXD2);
+
+  Serial.println("SLAVE READY (433 MHz)");
+}
+
+void loop() {
+  if (Serial2.available()) {
+    String cmd = Serial2.readStringUntil('\n');
+    cmd.trim();
+
+    Serial.print("Received: ");
+    Serial.println(cmd);
+
+    if (cmd == "ON") {
+      digitalWrite(LIGHT_PIN, HIGH);
+    } 
+    else if (cmd == "OFF") {
+      digitalWrite(LIGHT_PIN, LOW);
+    }
+  }
+}
+-------------------------------------------------------------------------------------------------------------------------

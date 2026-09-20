@@ -1,0 +1,122 @@
+Basic RTC 2 code 
+________________________________________________
+FIRST CODE (SET TIME — upload ONE TIME only)
+#include <Wire.h>
+
+#define SDA_PIN 4
+#define SCL_PIN 5
+
+byte decToBcd(byte val) {
+  return ((val / 10 * 16) + (val % 10));
+}
+
+// 👇 SET YOUR TIME HERE
+byte SEC = 0;
+byte MINUTES = 30;
+byte HOUR = 7;
+bool isPM = false; // false = AM, true = PM
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin(SDA_PIN, SCL_PIN);
+
+  Serial.println("Setting Time...");
+
+  // Set seconds
+  Wire.beginTransmission(0x68);
+  Wire.write(0);
+  Wire.write(decToBcd(SEC));
+  Wire.endTransmission();
+
+  // Set minutes
+  Wire.beginTransmission(0x68);
+  Wire.write(1);
+  Wire.write(decToBcd(MINUTES));
+  Wire.endTransmission();
+
+  // Set hour (12-hour mode)
+  byte bcdHour = decToBcd(HOUR);
+  bcdHour |= 0x40;
+  if (isPM) bcdHour |= 0x20;
+
+  Wire.beginTransmission(0x68);
+  Wire.write(2);
+  Wire.write(bcdHour);
+  Wire.endTransmission();
+
+  Serial.println("Time Set Done!");
+}
+
+void loop() {}
+______________________________________________Upload this code ✅
+Done — RTC now has time
+
+SECOND CODE (READ TIME — normal use)
+
+👉 Now upload this code (this is your final code)
+
+
+#include <Wire.h>
+
+#define SDA_PIN 4
+#define SCL_PIN 5
+
+byte bcdToDec(byte val) {
+  return ((val / 16 * 10) + (val % 16));
+}
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin(SDA_PIN, SCL_PIN);
+
+  Serial.println("DS3231 Running...");
+}
+
+void loop() {
+  Wire.beginTransmission(0x68);
+  Wire.write(0);
+  Wire.endTransmission();
+
+  Wire.requestFrom(0x68, 3);
+
+  if (Wire.available() >= 3) {
+    byte sec = bcdToDec(Wire.read() & 0x7F);
+    byte min = bcdToDec(Wire.read());
+
+    byte hourReg = Wire.read();
+    byte hour;
+
+    if (hourReg & 0x40) {
+      hour = bcdToDec(hourReg & 0x1F);
+      bool isPM = hourReg & 0x20;
+
+      Serial.print("Time: ");
+      Serial.print(hour);
+      Serial.print(":");
+      Serial.print(min);
+      Serial.print(":");
+      Serial.print(sec);
+      Serial.print(isPM ? " PM" : " AM");
+    } else {
+      hour = bcdToDec(hourReg & 0x3F);
+
+      Serial.print("Time: ");
+      Serial.print(hour);
+      Serial.print(":");
+      Serial.print(min);
+      Serial.print(":");
+      Serial.print(sec);
+    }
+
+    Serial.println();
+  }
+
+  delay(1000);
+}
+
+FINAL SIMPLE LOGIC
+First code → SET time (only once)
+Second code → READ time (forever)
+---------------------------------------------------------------------------------------
+
+

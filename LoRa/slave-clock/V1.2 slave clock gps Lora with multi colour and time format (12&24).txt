@@ -1,0 +1,533 @@
+https://drive.google.com/drive/folders/1t4wRAv0l_QdgabP6x60GvxJcK98A9lI1?usp=drive_link
+Slave GPS Lora colour , 12 hours 24 hours 
+-----------------------------------------------------------------
+#include <Arduino.h>
+#include <ESP32-HUB75-MatrixPanel-I2S-DMA.h>
+
+// ---- Panel config ----
+#define PANEL_WIDTH    64
+#define PANEL_HEIGHT   32
+#define PANELS_NUMBER  1
+
+// ---- LoRa UART ----
+#define RXD2 16
+#define TXD2 17
+
+// ---- LoRa Mode Pins ----
+#define M0 18
+#define M1 19
+
+// ---- Buttons ----
+#define BUTTON_PIN 21      // Color
+#define MODE_BUTTON 20     // Mode (NEW)
+
+MatrixPanel_I2S_DMA *dma_display = nullptr;
+
+// ---- Colors ----
+uint16_t currentColor;
+uint16_t colorRed, colorGreen, colorBlue, colorYellow, colorWhite;
+
+String receivedTime = "--:--";
+
+// ---- Blink ----
+bool showColon = true;
+unsigned long lastBlink = 0;
+
+// ---- Color Button ----
+bool buttonState = HIGH;
+bool lastButtonState = HIGH;
+unsigned long lastDebounceTime = 0;
+unsigned long debounceDelay = 50;
+
+unsigned long pressStartTime = 0;
+bool buttonPressed = false;
+
+// ---- Mode Button ----
+bool modeState = HIGH;
+bool lastModeState = HIGH;
+unsigned long lastModeDebounce = 0;
+
+unsigned long modePressStart = 0;
+bool modePressed = false;
+
+bool is24Hour = true;   // DEFAULT MODE
+
+// ---- Extract TIME ----
+String extractTime(String msg) {
+  msg.trim();
+  if (msg.startsWith("TIME:")) {
+    String t = msg.substring(5);
+    t.trim();
+    if (t.length() == 5 && t.charAt(2) == ':') {
+      return t;
+    }
+  }
+  return "";
+}
+
+// ---- Convert to 12 Hour ----
+String convertTo12Hour(String timeStr) {
+  int hour = timeStr.substring(0, 2).toInt();
+  String minute = timeStr.substring(3, 5);
+
+  String suffix = "AM";
+
+  if (hour >= 12) {
+    suffix = "PM";
+    if (hour > 12) hour -= 12;
+  } else if (hour == 0) {
+    hour = 12;
+  }
+
+  char buffer[6];
+  sprintf(buffer, "%02d:%s", hour, minute.c_str());
+
+  return String(buffer);  // (AM/PM not displayed due to space limit)
+}
+
+// ---- Display ----
+void showTime(String timeStr) {
+  dma_display->clearScreen();
+
+  dma_display->setTextSize(2);
+  dma_display->setTextColor(currentColor);
+  dma_display->setTextWrap(false);
+
+  String displayTime = timeStr;
+
+  // Convert if needed
+  if (!is24Hour && timeStr.length() == 5) {
+    displayTime = convertTo12Hour(timeStr);
+  }
+
+  // Blink colon
+  if (!showColon && displayTime.length() == 5) {
+    displayTime.setCharAt(2, ' ');
+  }
+
+  int x = (PANEL_WIDTH - (5 * 12)) / 2;
+  int y = (PANEL_HEIGHT - 16) / 2;
+
+  dma_display->setCursor(x, y);
+  dma_display->print(displayTime);
+}
+
+// ---- Handle COLOR Button ----
+void handleButton() {
+  int reading = digitalRead(BUTTON_PIN);
+
+  if (reading != lastButtonState) {
+    lastDebounceTime = millis();
+  }
+
+  if ((millis() - lastDebounceTime) > debounceDelay) {
+    if (reading != buttonState) {
+      buttonState = reading;
+
+      if (buttonState == LOW) {
+        pressStartTime = millis();
+        buttonPressed = true;
+      }
+
+      if (buttonState == HIGH && buttonPressed) {
+        unsigned long pressDuration = millis() - pressStartTime;
+        buttonPressed = false;
+
+        if (pressDuration >= 8000) currentColor = colorWhite;
+        else if (pressDuration >= 6000) currentColor = colorYellow;
+        else if (pressDuration >= 4000) currentColor = colorBlue;
+        else if (pressDuration >= 2000) currentColor = colorGreen;
+      }
+    }
+  }
+
+  lastButtonState = reading;
+}
+
+// ---- Handle MODE Button ----
+void handleModeButton() {
+  int reading = digitalRead(MODE_BUTTON);
+
+  if (reading != lastModeState) {
+    lastModeDebounce = millis();
+  }
+
+  if ((millis() - lastModeDebounce) > debounceDelay) {
+    if (reading != modeState) {
+      modeState = reading;
+
+      // PRESSED
+      if (modeState == LOW) {
+        modePressStart = millis();
+        modePressed = true;
+      }
+
+      // RELEASED
+      if (modeState == HIGH && modePressed) {
+        unsigned long pressDuration = millis() - modePressStart;
+        modePressed = false;
+
+        Serial.print("Mode Press: ");
+        Serial.println(pressDuration);
+
+        if (pressDuration >= 6000) {
+          is24Hour = true;
+          Serial.println("Mode: 24 Hour");
+        }
+        else if (pressDuration >= 3000) {
+          is24Hour = false;
+          Serial.println("Mode: 12 Hour");
+        }
+      }
+    }
+  }
+
+  lastModeState = reading;
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  // ---- Buttons ----
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(MODE_BUTTON, INPUT_PULLUP);
+
+  // ---- LoRa ----
+  pinMode(M0, OUTPUT);
+  pinMode(M1, OUTPUT);
+  digitalWrite(M0, LOW);
+  digitalWrite(M1, LOW);
+
+  Serial2.begin(9600, SERIAL_8N1, RXD2, TXD2);
+
+  // ---- HUB75 ----
+  HUB75_I2S_CFG::i2s_pins _pins = {
+    .r1 = 1, .g1 = 2, .b1 = 3,
+    .r2 = 4, .g2 = 5, .b2 = 6,
+    .a  = 7, .b  = 8, .c  = 9,
+    .d  = 10, .e  = 11,
+    .lat = 13, .oe  = 14, .clk = 12
+  };
+
+  HUB75_I2S_CFG mxconfig(PANEL_WIDTH, PANEL_HEIGHT, PANELS_NUMBER, _pins);
+  mxconfig.i2sspeed = HUB75_I2S_CFG::HZ_10M;
+
+  dma_display = new MatrixPanel_I2S_DMA(mxconfig);
+  dma_display->begin();
+  dma_display->setBrightness8(100);
+  dma_display->clearScreen();
+
+  // ---- Colors ----
+  colorRed    = dma_display->color565(255, 0, 0);
+  colorGreen  = dma_display->color565(0, 255, 0);
+  colorBlue   = dma_display->color565(0, 0, 255);
+  colorYellow = dma_display->color565(255, 255, 0);
+  colorWhite  = dma_display->color565(255, 255, 255);
+
+  currentColor = colorRed;
+
+  dma_display->setCursor(8, 12);
+  dma_display->print("Waiting...");
+}
+
+void loop() {
+
+  // ---- LoRa ----
+  if (Serial2.available()) {
+    String msg = Serial2.readStringUntil('\n');
+    msg.trim();
+
+    String t = extractTime(msg);
+    if (t != "") receivedTime = t;
+  }
+
+  // ---- Buttons ----
+  handleButton();
+  handleModeButton();
+
+  // ---- Blink ----
+  if (millis() - lastBlink >= 1000) {
+    showColon = !showColon;
+    lastBlink = millis();
+  }
+
+  // ---- Display ----
+  showTime(receivedTime);
+
+  delay(50);
+}
+-----------------------------------------------------------------------------------------------------------------
+setup AM/PM code and brightnes 200
+
+#include <Arduino.h>
+#include <ESP32-HUB75-MatrixPanel-I2S-DMA.h>
+
+// ---- Panel config ----
+#define PANEL_WIDTH    64
+#define PANEL_HEIGHT   32
+#define PANELS_NUMBER  1
+
+// ---- LoRa UART ----
+#define RXD2 16
+#define TXD2 17
+
+// ---- LoRa Mode Pins ----
+#define M0 18
+#define M1 19
+
+// ---- Buttons ----
+#define BUTTON_PIN 21
+#define MODE_BUTTON 20
+
+MatrixPanel_I2S_DMA *dma_display = nullptr;
+
+// ---- Colors ----
+uint16_t currentColor;
+uint16_t colorRed, colorGreen, colorBlue, colorYellow, colorWhite;
+
+String receivedTime = "--:--";
+
+// ---- Blink ----
+bool showColon = true;
+unsigned long lastBlink = 0;
+
+// ---- Color Button ----
+bool buttonState = HIGH;
+bool lastButtonState = HIGH;
+unsigned long lastDebounceTime = 0;
+unsigned long debounceDelay = 50;
+
+unsigned long pressStartTime = 0;
+bool buttonPressed = false;
+
+// ---- Mode Button ----
+bool modeState = HIGH;
+bool lastModeState = HIGH;
+unsigned long lastModeDebounce = 0;
+
+unsigned long modePressStart = 0;
+bool modePressed = false;
+
+bool is24Hour = true;
+
+// ---- Function declarations ----
+String extractTime(String msg);
+String convertTo12Hour(String timeStr, String &suffix);
+void showTime(String timeStr);
+void handleButton();
+void handleModeButton();
+
+// ---- Extract TIME ----
+String extractTime(String msg) {
+  msg.trim();
+  if (msg.startsWith("TIME:")) {
+    String t = msg.substring(5);
+    t.trim();
+    if (t.length() == 5 && t.charAt(2) == ':') {
+      return t;
+    }
+  }
+  return "";
+}
+
+// ---- Convert to 12 Hour + AM/PM ----
+String convertTo12Hour(String timeStr, String &suffix) {
+  int hour = timeStr.substring(0, 2).toInt();
+  String minute = timeStr.substring(3, 5);
+
+  suffix = "AM";
+
+  if (hour >= 12) {
+    suffix = "PM";
+    if (hour > 12) hour -= 12;
+  } else if (hour == 0) {
+    hour = 12;
+  }
+
+  char buffer[6];
+  sprintf(buffer, "%02d:%s", hour, minute.c_str());
+
+  return String(buffer);
+}
+
+// ---- Display ----
+void showTime(String timeStr) {
+  dma_display->clearScreen();
+  dma_display->setTextWrap(false);
+
+  String displayTime = timeStr;
+  String ampm = "";
+  bool showAmPm = false;
+
+  // ---- Convert if 12 hour ----
+  if (!is24Hour && timeStr.length() == 5) {
+    displayTime = convertTo12Hour(timeStr, ampm);
+    showAmPm = true;
+  }
+
+  // ---- Blink colon ----
+  if (!showColon && displayTime.length() == 5) {
+    displayTime.setCharAt(2, ' ');
+  }
+
+  // ---- TEXT SETTINGS ----
+  dma_display->setTextSize(2);
+  dma_display->setTextColor(currentColor);
+
+  int textWidth = 5 * 12;   // "HH:MM"
+  int textHeight = 16;
+  int x = (PANEL_WIDTH - textWidth) / 2;
+  int y;
+
+  // ---- CENTER LOGIC ----
+  if (showAmPm) {
+    y = 4; // move up for AM/PM
+  } else {
+    y = (PANEL_HEIGHT - textHeight) / 2;
+  }
+
+  dma_display->setCursor(x, y);
+  dma_display->print(displayTime);
+
+  // ---- AM/PM ----
+  if (showAmPm && ampm != "") {
+    dma_display->setTextSize(1);
+    dma_display->setTextColor(colorWhite);
+
+    int ampmWidth = ampm.length() * 6;
+    int ampmX = (PANEL_WIDTH - ampmWidth) / 2;
+    int ampmY = y + textHeight + 2;
+
+    dma_display->setCursor(ampmX, ampmY);
+    dma_display->print(ampm);
+  }
+}
+
+// ---- Handle COLOR Button ----
+void handleButton() {
+  int reading = digitalRead(BUTTON_PIN);
+
+  if (reading != lastButtonState) {
+    lastDebounceTime = millis();
+  }
+
+  if ((millis() - lastDebounceTime) > debounceDelay) {
+    if (reading != buttonState) {
+      buttonState = reading;
+
+      if (buttonState == LOW) {
+        pressStartTime = millis();
+        buttonPressed = true;
+      }
+
+      if (buttonState == HIGH && buttonPressed) {
+        unsigned long pressDuration = millis() - pressStartTime;
+        buttonPressed = false;
+
+        if (pressDuration >= 8000) currentColor = colorWhite;
+        else if (pressDuration >= 6000) currentColor = colorYellow;
+        else if (pressDuration >= 4000) currentColor = colorBlue;
+        else if (pressDuration >= 2000) currentColor = colorGreen;
+      }
+    }
+  }
+
+  lastButtonState = reading;
+}
+
+// ---- Handle MODE Button ----
+void handleModeButton() {
+  int reading = digitalRead(MODE_BUTTON);
+
+  if (reading != lastModeState) {
+    lastModeDebounce = millis();
+  }
+
+  if ((millis() - lastModeDebounce) > debounceDelay) {
+    if (reading != modeState) {
+      modeState = reading;
+
+      if (modeState == LOW) {
+        modePressStart = millis();
+        modePressed = true;
+      }
+
+      if (modeState == HIGH && modePressed) {
+        unsigned long pressDuration = millis() - modePressStart;
+        modePressed = false;
+
+        if (pressDuration >= 6000) {
+          is24Hour = true;
+        }
+        else if (pressDuration >= 3000) {
+          is24Hour = false;
+        }
+      }
+    }
+  }
+
+  lastModeState = reading;
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(MODE_BUTTON, INPUT_PULLUP);
+
+  pinMode(M0, OUTPUT);
+  pinMode(M1, OUTPUT);
+  digitalWrite(M0, LOW);
+  digitalWrite(M1, LOW);
+
+  Serial2.begin(9600, SERIAL_8N1, RXD2, TXD2);
+
+  HUB75_I2S_CFG::i2s_pins _pins = {
+    .r1 = 1, .g1 = 2, .b1 = 3,
+    .r2 = 4, .g2 = 5, .b2 = 6,
+    .a  = 7, .b  = 8, .c  = 9,
+    .d  = 10, .e  = 11, .lat = 13, .oe  = 14, .clk = 12
+  };
+
+  HUB75_I2S_CFG mxconfig(PANEL_WIDTH, PANEL_HEIGHT, PANELS_NUMBER, _pins);
+  mxconfig.i2sspeed = HUB75_I2S_CFG::HZ_10M;
+
+  dma_display = new MatrixPanel_I2S_DMA(mxconfig);
+  dma_display->begin();
+  dma_display->setBrightness8(200);
+  dma_display->clearScreen();
+
+  colorRed    = dma_display->color565(255, 0, 0);
+  colorGreen  = dma_display->color565(0, 255, 0);
+  colorBlue   = dma_display->color565(0, 0, 255);
+  colorYellow = dma_display->color565(255, 255, 0);
+  colorWhite  = dma_display->color565(255, 255, 255);
+
+  currentColor = colorRed;
+
+  dma_display->setCursor(8, 12);
+  dma_display->print("Waiting...");
+}
+
+void loop() {
+  if (Serial2.available()) {
+    String msg = Serial2.readStringUntil('\n');
+    msg.trim();
+
+    String t = extractTime(msg);
+    if (t != "") receivedTime = t;
+  }
+
+  handleButton();
+  handleModeButton();
+
+  if (millis() - lastBlink >= 1000) {
+    showColon = !showColon;
+    lastBlink = millis();
+  }
+
+  showTime(receivedTime);
+
+  delay(50);
+}
+---------------------------------------------------------------------------------------------------------------

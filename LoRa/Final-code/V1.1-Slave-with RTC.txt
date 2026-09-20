@@ -1,0 +1,269 @@
+                         with RTC - basic code need develop more 
+
+#include <Arduino.h>
+#include <Wire.h>
+#include <ESP32-HUB75-MatrixPanel-I2S-DMA.h>
+
+// ================= PANEL =================
+#define PANEL_WIDTH 64
+#define PANEL_HEIGHT 32
+MatrixPanel_I2S_DMA *dma_display = nullptr;
+
+// ================= LORA =================
+#define RXD2 16
+#define TXD2 17
+#define M0 18
+#define M1 19
+
+// ================= RTC =================
+#define SDA_PIN 40
+#define SCL_PIN 41
+
+// ================= BUTTON =================
+#define MODE_BUTTON 20
+
+// ================= TIME =================
+String receivedTime = "00:00:00";
+unsigned long lastLoraTime = 0;
+bool useRTC = false;
+
+// ================= MODE =================
+bool is24Hour = true;
+bool modeState = HIGH, lastModeState = HIGH;
+unsigned long lastDebounce = 0;
+unsigned long pressStart = 0;
+bool pressed = false;
+
+// ================= DISPLAY =================
+uint16_t color;
+
+#define W 7
+#define H 16
+#define T 2
+
+bool showSecondsColon = true;
+unsigned long lastBlink = 0;
+
+// ================= BCD =================
+byte bcdToDec(byte val) {
+  return ((val / 16 * 10) + (val % 16));
+}
+
+byte decToBcd(byte val) {
+  return ((val / 10 * 16) + (val % 10));
+}
+
+// ================= RTC WRITE =================
+void setRTC(String t) {
+  int h = t.substring(0,2).toInt();
+  int m = t.substring(3,5).toInt();
+  int s = t.substring(6,8).toInt();
+
+  Wire.beginTransmission(0x68);
+  Wire.write(0);
+  Wire.write(decToBcd(s));
+  Wire.write(decToBcd(m));
+
+  byte hourReg = decToBcd(h);
+  hourReg &= 0x3F; // force 24H
+  Wire.write(hourReg);
+
+  Wire.endTransmission();
+
+  Serial.println("RTC Synced");
+}
+
+// ================= RTC READ =================
+String readRTC() {
+  Wire.beginTransmission(0x68);
+  Wire.write(0);
+  Wire.endTransmission();
+
+  Wire.requestFrom(0x68, 3);
+
+  if (Wire.available() >= 3) {
+    byte sec = bcdToDec(Wire.read() & 0x7F);
+    byte min = bcdToDec(Wire.read());
+    byte hour = bcdToDec(Wire.read() & 0x3F);
+
+    char buf[10];
+    sprintf(buf, "%02d:%02d:%02d", hour, min, sec);
+    return String(buf);
+  }
+  return "00:00:00";
+}
+
+// ================= 12H CONVERT =================
+String convertTo12(String t){
+  int h = t.substring(0,2).toInt();
+  String m = t.substring(3,5);
+  String s = t.substring(6,8);
+
+  if(h >= 12){
+    if(h > 12) h -= 12;
+  } else if(h == 0){
+    h = 12;
+  }
+
+  char buf[10];
+  sprintf(buf,"%02d:%s:%s",h,m.c_str(),s.c_str());
+  return String(buf);
+}
+
+// ================= BUTTON =================
+void handleMode(){
+  int r = digitalRead(MODE_BUTTON);
+
+  if(r != lastModeState) lastDebounce = millis();
+
+  if((millis() - lastDebounce) > 50){
+    if(r != modeState){
+      modeState = r;
+
+      if(r == LOW){
+        pressStart = millis();
+        pressed = true;
+      }
+
+      if(r == HIGH && pressed){
+        pressed = false;
+
+        if(millis() - pressStart > 1500){
+          is24Hour = !is24Hour;
+          Serial.println(is24Hour ? "24H MODE" : "12H MODE");
+        }
+      }
+    }
+  }
+  lastModeState = r;
+}
+
+// ================= SEGMENTS =================
+void seg(int x,int y,int s){
+  switch(s){
+    case 0: dma_display->fillRect(x,y,W,T,color); break;
+    case 1: dma_display->fillRect(x,y,T,H/2,color); break;
+    case 2: dma_display->fillRect(x+W-T,y,T,H/2,color); break;
+    case 3: dma_display->fillRect(x,y+H/2-T/2,W,T,color); break;
+    case 4: dma_display->fillRect(x,y+H/2,T,H/2,color); break;
+    case 5: dma_display->fillRect(x+W-T,y+H/2,T,H/2,color); break;
+    case 6: dma_display->fillRect(x,y+H-T,W,T,color); break;
+  }
+}
+
+void drawDigit(int x,int y,char n){
+  switch(n){
+    case '0': seg(x,y,0);seg(x,y,1);seg(x,y,2);seg(x,y,4);seg(x,y,5);seg(x,y,6); break;
+    case '1': seg(x,y,2);seg(x,y,5); break;
+    case '2': seg(x,y,0);seg(x,y,2);seg(x,y,3);seg(x,y,4);seg(x,y,6); break;
+    case '3': seg(x,y,0);seg(x,y,2);seg(x,y,3);seg(x,y,5);seg(x,y,6); break;
+    case '4': seg(x,y,1);seg(x,y,2);seg(x,y,3);seg(x,y,5); break;
+    case '5': seg(x,y,0);seg(x,y,1);seg(x,y,3);seg(x,y,5);seg(x,y,6); break;
+    case '6': seg(x,y,0);seg(x,y,1);seg(x,y,3);seg(x,y,4);seg(x,y,5);seg(x,y,6); break;
+    case '7': seg(x,y,0);seg(x,y,2);seg(x,y,5); break;
+    case '8': seg(x,y,0);seg(x,y,1);seg(x,y,2);seg(x,y,3);seg(x,y,4);seg(x,y,5);seg(x,y,6); break;
+    case '9': seg(x,y,0);seg(x,y,1);seg(x,y,2);seg(x,y,3);seg(x,y,5);seg(x,y,6); break;
+  }
+}
+
+void drawColon(int x,int y,bool blink=false){
+  if(!blink || (blink && showSecondsColon)){
+    dma_display->fillRect(x,y+H/4,2,2,color);
+    dma_display->fillRect(x,y+3*H/4-2,2,2,color);
+  }
+}
+
+// ================= DISPLAY =================
+void showTime(String t){
+
+  if(!is24Hour){
+    t = convertTo12(t);
+  }
+
+  if(millis()-lastBlink>1000){
+    showSecondsColon = !showSecondsColon;
+    lastBlink = millis();
+  }
+
+  dma_display->clearScreen();
+
+  int x=6;
+  int y=9;
+
+  for(int i=0;i<t.length();i++){
+    char c=t[i];
+
+    if(c==':'){
+      if(i==2) drawColon(x,y,false);
+      else drawColon(x,y,true);
+      x+=3;
+    } else {
+      drawDigit(x,y,c);
+      x+=W+1;
+    }
+  }
+}
+
+// ================= SETUP =================
+void setup(){
+  Serial.begin(115200);
+  Serial2.begin(9600,SERIAL_8N1,RXD2,TXD2);
+
+  Wire.begin(SDA_PIN, SCL_PIN);
+
+  pinMode(MODE_BUTTON, INPUT_PULLUP);
+
+  pinMode(M0,OUTPUT);
+  pinMode(M1,OUTPUT);
+  digitalWrite(M0,LOW);
+  digitalWrite(M1,LOW);
+
+  HUB75_I2S_CFG::i2s_pins p={
+    .r1=1,.g1=2,.b1=3,.r2=4,.g2=5,.b2=6,
+    .a=7,.b=8,.c=9,.d=10,.e=11,
+    .lat=13,.oe=14,.clk=12
+  };
+
+  HUB75_I2S_CFG cfg(PANEL_WIDTH,PANEL_HEIGHT,1,p);
+  dma_display=new MatrixPanel_I2S_DMA(cfg);
+  dma_display->begin();
+
+  dma_display->setBrightness8(230);
+  color = dma_display->color565(255,0,0);
+}
+
+// ================= LOOP =================
+void loop(){
+
+  // ===== LORA =====
+  if(Serial2.available()){
+    String msg=Serial2.readStringUntil('\n');
+    msg.trim();
+
+    if(msg.startsWith("TIME:")){
+      String newTime = msg.substring(5);
+
+      if(newTime != receivedTime){
+        setRTC(newTime);
+      }
+
+      receivedTime = newTime;
+      lastLoraTime = millis();
+      useRTC = false;
+    }
+  }
+
+  // ===== TIMEOUT =====
+  if(millis() - lastLoraTime > 11000){
+    useRTC = true;
+  }
+
+  String displayTime = useRTC ? readRTC() : receivedTime;
+
+  handleMode();   // 🔥 FIXED (button works)
+  showTime(displayTime);
+
+  delay(30);
+}
+
+--------------------------------------------------------------

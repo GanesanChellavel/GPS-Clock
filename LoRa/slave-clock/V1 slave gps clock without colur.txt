@@ -1,0 +1,142 @@
+V1 slave gps clock without colur
+--------------------------------------------------------------------------------------------
+#include <Arduino.h>
+#include <ESP32-HUB75-MatrixPanel-I2S-DMA.h>
+
+// ---- Panel config ----
+#define PANEL_WIDTH    64
+#define PANEL_HEIGHT   32
+#define PANELS_NUMBER  1
+
+// ---- LoRa UART ----
+#define RXD2 16
+#define TXD2 17
+
+//  No conflict pins
+#define M0 18
+#define M1 19
+
+MatrixPanel_I2S_DMA *dma_display = nullptr;
+uint16_t colorRed;
+
+String receivedTime = "--:--";
+
+// Blinking control
+bool showColon = true;
+unsigned long lastBlink = 0;
+
+// ---- Extract TIME from "TIME:HH:MM" ----
+String extractTime(String msg) {
+  msg.trim();
+
+  if (msg.startsWith("TIME:")) {
+    String t = msg.substring(5);
+    t.trim();
+
+    if (t.length() == 5 && t.charAt(2) == ':') {
+      return t;
+    }
+  }
+  return "";
+}
+
+// ---- Display with blinking colon ----
+void showTime(String timeStr) {
+  dma_display->clearScreen();
+
+  dma_display->setTextSize(2);
+  dma_display->setTextColor(colorRed);
+  dma_display->setTextWrap(false);
+
+  // Create blinking version
+  String displayTime = timeStr;
+
+  if (!showColon && displayTime.length() == 5) {
+    displayTime.setCharAt(2, ' ');  // hide colon
+  }
+
+  int x = (PANEL_WIDTH - (5 * 12)) / 2;
+  int y = (PANEL_HEIGHT - 16) / 2;
+
+  dma_display->setCursor(x, y);
+  dma_display->print(displayTime);
+
+  Serial.println("Display: " + displayTime);
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  // ---- LoRa setup ----
+  pinMode(M0, OUTPUT);
+  pinMode(M1, OUTPUT);
+
+  digitalWrite(M0, LOW);
+  digitalWrite(M1, LOW);
+
+  Serial2.begin(9600, SERIAL_8N1, RXD2, TXD2);
+
+  Serial.println("LoRa Time Display with Blinking Colon");
+
+  // ---- HUB75 Pins ----
+  HUB75_I2S_CFG::i2s_pins _pins = {
+    .r1 = 1,
+    .g1 = 2,
+    .b1 = 3,
+    .r2 = 4,
+    .g2 = 5,
+    .b2 = 6,
+    .a  = 7,
+    .b  = 8,
+    .c  = 9,
+    .d  = 10,
+    .e  = 11,
+    .lat = 13,
+    .oe  = 14,
+    .clk = 12
+  };
+
+  HUB75_I2S_CFG mxconfig(PANEL_WIDTH, PANEL_HEIGHT, PANELS_NUMBER, _pins);
+  mxconfig.clkphase = false;
+  mxconfig.i2sspeed = HUB75_I2S_CFG::HZ_10M;
+
+  dma_display = new MatrixPanel_I2S_DMA(mxconfig);
+  dma_display->begin();
+  dma_display->setBrightness8(100);
+  dma_display->clearScreen();
+
+  colorRed = dma_display->color565(255, 0, 0);
+
+  // Initial screen
+  dma_display->setTextSize(1);
+  dma_display->setTextColor(colorRed);
+  dma_display->setCursor(8, 12);
+  dma_display->print("Waiting...");
+}
+
+void loop() {
+  // ---- Receive LoRa ----
+  if (Serial2.available()) {
+    String msg = Serial2.readStringUntil('\n');
+    msg.trim();
+
+    Serial.println("Received: " + msg);
+
+    String t = extractTime(msg);
+    if (t != "") {
+      receivedTime = t;
+      Serial.println("Parsed Time: " + receivedTime);
+    }
+  }
+
+  // ---- Blink logic (1 second) ----
+  if (millis() - lastBlink >= 1000) {
+    showColon = !showColon;
+    lastBlink = millis();
+  }
+
+  // ---- Display ----
+  showTime(receivedTime);
+
+  delay(100);
+}

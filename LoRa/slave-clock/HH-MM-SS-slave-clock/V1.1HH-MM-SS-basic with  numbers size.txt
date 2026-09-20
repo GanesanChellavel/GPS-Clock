@@ -1,0 +1,180 @@
+#include <Arduino.h>
+#include <ESP32-HUB75-MatrixPanel-I2S-DMA.h>
+
+// ---- Panel ----
+#define PANEL_WIDTH 64
+#define PANEL_HEIGHT 32
+
+#define RXD2 16
+#define TXD2 17
+
+#define M0 18
+#define M1 19
+
+#define MODE_BUTTON 20
+
+MatrixPanel_I2S_DMA *dma_display = nullptr;
+
+// ---- Time ----
+String receivedTime = "00:00:00";
+
+// ---- Mode ----
+bool is24Hour = true;
+bool modeState = HIGH, lastModeState = HIGH;
+unsigned long lastDebounce = 0;
+unsigned long pressStart = 0;
+bool pressed = false;
+
+// ---- Color ----
+uint16_t color;
+
+// ---- Digit size (FIT 64 WIDTH) ----
+#define W 7   // width
+#define H 16  // height
+#define T 2   // thickness
+
+// ================= SEGMENTS =================
+void seg(int x,int y,int s){
+  switch(s){
+    case 0: dma_display->fillRect(x,y,W,T,color); break;
+    case 1: dma_display->fillRect(x,y,T,H/2,color); break;
+    case 2: dma_display->fillRect(x+W-T,y,T,H/2,color); break;
+    case 3: dma_display->fillRect(x,y+H/2-T/2,W,T,color); break;
+    case 4: dma_display->fillRect(x,y+H/2,T,H/2,color); break;
+    case 5: dma_display->fillRect(x+W-T,y+H/2,T,H/2,color); break;
+    case 6: dma_display->fillRect(x,y+H-T,W,T,color); break;
+  }
+}
+
+// ================= DIGIT =================
+void drawDigit(int x,int y,char n){
+  switch(n){
+    case '0': seg(x,y,0);seg(x,y,1);seg(x,y,2);seg(x,y,4);seg(x,y,5);seg(x,y,6); break;
+    case '1': seg(x,y,2);seg(x,y,5); break;
+    case '2': seg(x,y,0);seg(x,y,2);seg(x,y,3);seg(x,y,4);seg(x,y,6); break;
+    case '3': seg(x,y,0);seg(x,y,2);seg(x,y,3);seg(x,y,5);seg(x,y,6); break;
+    case '4': seg(x,y,1);seg(x,y,2);seg(x,y,3);seg(x,y,5); break;
+    case '5': seg(x,y,0);seg(x,y,1);seg(x,y,3);seg(x,y,5);seg(x,y,6); break;
+    case '6': seg(x,y,0);seg(x,y,1);seg(x,y,3);seg(x,y,4);seg(x,y,5);seg(x,y,6); break;
+    case '7': seg(x,y,0);seg(x,y,2);seg(x,y,5); break;
+    case '8': seg(x,y,0);seg(x,y,1);seg(x,y,2);seg(x,y,3);seg(x,y,4);seg(x,y,5);seg(x,y,6); break;
+    case '9': seg(x,y,0);seg(x,y,1);seg(x,y,2);seg(x,y,3);seg(x,y,5);seg(x,y,6); break;
+  }
+}
+
+// ================= COLON =================
+void drawColon(int x,int y){
+  dma_display->fillRect(x,y+4,2,2,color);
+  dma_display->fillRect(x,y+9,2,2,color);
+}
+
+// ================= 12H CONVERT =================
+String convertTo12(String t){
+  int h = t.substring(0,2).toInt();
+  String m = t.substring(3,5);
+  String s = t.substring(6,8);
+
+  if(h>=12){ if(h>12) h-=12; }
+  else if(h==0){ h=12; }
+
+  char buf[10];
+  sprintf(buf,"%02d:%s:%s",h,m.c_str(),s.c_str());
+  return String(buf);
+}
+
+// ================= MODE BUTTON =================
+void handleMode(){
+  int r = digitalRead(MODE_BUTTON);
+
+  if(r!=lastModeState) lastDebounce=millis();
+
+  if(millis()-lastDebounce>50){
+    if(r!=modeState){
+      modeState=r;
+
+      if(r==LOW){
+        pressStart=millis();
+        pressed=true;
+      }
+
+      if(r==HIGH && pressed){
+        pressed=false;
+        if(millis()-pressStart>1500){
+          is24Hour=!is24Hour;
+          Serial.println(is24Hour?"24H":"12H");
+        }
+      }
+    }
+  }
+  lastModeState=r;
+}
+
+// ================= DISPLAY =================
+void showTime(){
+
+  dma_display->clearScreen();
+
+  String t = receivedTime;
+  if(!is24Hour) t = convertTo12(t);
+
+  int x=6;
+  int y=9;
+
+  for(int i=0;i<t.length();i++){
+    char c=t[i];
+
+    if(c==':'){
+      drawColon(x,y);
+      x+=3;
+    } else {
+      drawDigit(x,y,c);
+      x+=W+1;
+    }
+  }
+}
+
+// ================= SETUP =================
+void setup(){
+  Serial.begin(115200);
+
+  pinMode(MODE_BUTTON,INPUT_PULLUP);
+
+  pinMode(M0,OUTPUT);
+  pinMode(M1,OUTPUT);
+  digitalWrite(M0,LOW);
+  digitalWrite(M1,LOW);
+
+  Serial2.begin(9600,SERIAL_8N1,RXD2,TXD2);
+
+  HUB75_I2S_CFG::i2s_pins p={
+    .r1=1,.g1=2,.b1=3,.r2=4,.g2=5,.b2=6,
+    .a=7,.b=8,.c=9,.d=10,.e=11,
+    .lat=13,.oe=14,.clk=12
+  };
+
+  HUB75_I2S_CFG cfg(PANEL_WIDTH,PANEL_HEIGHT,1,p);
+  dma_display=new MatrixPanel_I2S_DMA(cfg);
+  dma_display->begin();
+
+  // ---- Brightness & Color ----
+  dma_display->setBrightness8(230);       // brighter (0-255)
+  color = dma_display->color565(255,0,0); // red
+}
+
+// ================= LOOP =================
+void loop(){
+
+  if(Serial2.available()){
+    String msg=Serial2.readStringUntil('\n');
+    msg.trim();
+
+    if(msg.startsWith("TIME:")){
+      receivedTime=msg.substring(5);
+    }
+  }
+
+  handleMode();
+  showTime();
+
+  delay(30);
+}
